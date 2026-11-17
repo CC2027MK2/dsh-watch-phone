@@ -1,6 +1,6 @@
 {
   "name": "dsh-watch-phone",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Hold-to-talk chat between an Android smartwatch and DeepSeek Harness on your phone: local speech-to-text, local TTS, real DSH sessions, and the watch APK bundled in.",
   "type": "module",
   "license": "MIT",
