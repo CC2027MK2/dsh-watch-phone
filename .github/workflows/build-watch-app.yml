@@ -49,7 +49,11 @@ jobs:
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
       - name: Build release APK
-        run: ./gradlew assembleRelease --no-daemon --console=plain
+        run: |
+          # The wrapper is uploaded through the REST API, which cannot record the
+          # executable bit, so restore it here.
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --console=plain
 
       - name: Collect artifact
         run: |
