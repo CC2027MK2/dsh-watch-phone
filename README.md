@@ -36,7 +36,7 @@ adb shell pm grant com.dsh.watchchat android.permission.RECORD_AUDIO
 ```
 
 The watch discovers the host by itself: it tries the address saved in its settings, then a
-list of known gateways (`10.180.13.101:38402`, `10.33.28.139:38402`, `192.168.137.1:38402`),
+list of known gateways (`203.0.113.1:38402`, `198.51.100.20:38402`, `192.0.2.1:38402`),
 then scans its /24 for port 38402. You can also type an address into the watch — tap the
 status line at the top, or long-press the chat area.
 
@@ -69,7 +69,7 @@ Add these keys to the bundle's row config (`cordis.patch.yml`):
 | `cwd` | `process.cwd()` | Working directory for that session. |
 | `allowExec` | `false` | Enables `POST /exec` (shell on the host). Leave off unless you know why. |
 | `allowRelay` | `false` | Enables `POST /relay` (raw TCP relay, used to reach a watch on another subnet). |
-| `proxyBase` | `''` | Fallback host for `/stt` and `/tts`, e.g. `http://192.168.1.10:38401`. |
+| `proxyBase` | `''` | Fallback host for `/stt` and `/tts`, e.g. `http://192.0.2.10:38401`. |
 | `logFile` | `<home>/.dsh/watch-phone/bridge.log` | Bridge log; recordings are archived next to it in `rec/`. |
 | `tts.apiKey` | — | MiMo key. If omitted, the plugin reads the `local-voice` plugin's saved settings (`/root/.dsh/dsh-go/plugins/local-voice/data/settings.json`). |
 | `tts.baseURL` | `https://api.xiaomimimo.com/v1` | MiMo endpoint. |

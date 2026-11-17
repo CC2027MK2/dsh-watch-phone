@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "智能手表桥接（dsh-watch-draft）",
+    "description": "HTTP 桥接插件，让智能手表（小米手表 5 / WearOS）通过局域网与 DSH 对话，支持语音输入。暴露 GET /health 和 POST /chat（端口默认 38400）。手表端做本地语音转文字，把文本发到 /chat，DSH 返回助手回复。",
+    "detail": "docs/DETAIL.md"
+  }
+}

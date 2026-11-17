@@ -1,0 +1,13 @@
+# dsh-watch-draft bundle patch layer.
+#
+# `insert` mounts the plugin row. `name` is the package name (resolved through
+# node resolution from the profile's node_modules), `id` is the row's stable
+# identity that settings address this plugin's preferences by.
+- insert:
+    - id: watch-draft
+      name: 'dsh-watch-draft'
+      config:
+        port: 38401
+        token: ''
+        maxWaitMs: 180000
+        cwd: '<workspace>'

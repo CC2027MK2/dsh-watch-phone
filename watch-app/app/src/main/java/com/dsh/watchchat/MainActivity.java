@@ -53,13 +53,13 @@ public class MainActivity extends AppCompatActivity {
      * only as a fallback.
      */
     private static final String[] KNOWN_SERVERS = {
-            // Phone-as-hotspot gateway (Xiaomi uses 10.180.13.101, not 192.168.43.1)
-            "http://10.180.13.101:38402",
+            // Phone-as-hotspot gateway (Xiaomi uses 203.0.113.1, not 192.168.43.1)
+            "http://203.0.113.1:38402",
             // Phone on the office Wi-Fi
-            "http://10.33.28.139:38402",
+            "http://198.51.100.20:38402",
             // PC bridges, kept only as a fallback
-            "http://192.168.137.1:38402",
-            "http://192.168.137.1:38401",
+            "http://192.0.2.1:38402",
+            "http://192.0.2.1:38401",
     };
     private static final String DEFAULT_SERVER = KNOWN_SERVERS[0];
     /** Offline TTS engine on HyperOS: com.xiaomi.mibrain.speech (小爱语音). */
@@ -638,7 +638,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showServerDialog() {
-        inputText.setHint("输入服务器地址 (如 http://192.168.0.61:38401)");
+        inputText.setHint("输入服务器地址 (如 http://192.0.2.10:38401)");
         inputText.requestFocus();
         sendButton.setOnClickListener(v -> {
             String url = inputText.getText().toString().trim();

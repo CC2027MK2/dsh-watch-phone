@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Smartwatch bridge (dsh-watch-draft)",
+    "description": "HTTP bridge that lets a smartwatch (Xiaomi Watch 5 / WearOS) chat with DSH over LAN with voice input. Exposes GET /health and POST /chat on a configurable port (default 38400). The watch app does on-device speech-to-text and sends text to /chat; DSH replies with the assistant's answer.",
+    "detail": "docs/DETAIL.md"
+  }
+}

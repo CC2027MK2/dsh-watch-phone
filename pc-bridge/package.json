@@ -1,0 +1,25 @@
+{
+  "name": "dsh-watch-draft",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Smartwatch bridge: lets a watch (Xiaomi Watch / WearOS) chat with DSH over LAN with voice input.",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "agent-bridge.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

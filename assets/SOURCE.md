@@ -22,3 +22,15 @@ What the client does:
   tap the status line (or long-press the transcript) to type an address by hand.
 
 Rebuilding the APK requires the watch source tree; this package ships the built artifact only.
+
+## Sanitised build (0.1.6)
+
+The APK shipped from 0.1.6 on is built from the `watch-app/` tree in this repository,
+in which every private address has been replaced with a documentation-range default
+(RFC 5737: `203.0.113.1` for the phone-as-hotspot gateway, `198.51.100.20` for the
+phone on Wi-Fi, `192.0.2.10`/`192.0.2.1` for a PC bridge). Those defaults are hints
+only: the client remembers the address you save, and falls back to a `/24` scan for
+port 38402 on the LAN it is attached to.
+
+No keystore, Wi-Fi name, hotspot password, device serial or machine path is part of
+this repository.

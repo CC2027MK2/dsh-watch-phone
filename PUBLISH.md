@@ -20,7 +20,7 @@ DSH 0.2.2-rc.x 上做过真实安装测试。
 ## 1. 发布前自检（本机可跑）
 
 ```powershell
-cd C:\Users\excal\Documents\deepseek-harness\default-workspace\packages
+cd <workspace>\packages
 node _smoke.mjs                       # 桩 ctx 冒烟：/health、/watch/app.apk、403、404
 cd dsh-watch-phone
 node --check index.js
@@ -53,7 +53,7 @@ npm 从 2026-08 起限制「绕过 2FA 的 token」做账户级操作，**2027-0
 发一版（本机一条命令）：
 
 ```powershell
-cd C:\Users\excal\Documents\deepseek-harness\default-workspace\packages
+cd <workspace>\packages
 .\publish.ps1 -Version 0.1.6      # 自检 → sync → gh workflow run → 等 registry 就绪
 ```
 
@@ -87,7 +87,7 @@ gh run list --repo CC2027MK2/dsh-watch-phone --limit 1
 
 ```powershell
 $env:NPM_PUBLISH_TOKEN = "npm_xxx"
-cd C:\Users\excal\Documents\deepseek-harness\default-workspace\packages
+cd <workspace>\packages
 .\publish.ps1 -Version 0.1.6 -WithToken    # 自检 → pack → token 直发（绕开 CI）
 ```
 
@@ -105,7 +105,7 @@ npm publish --access public
 `npm publish` 带上 token 的非交互写法：
 
 ```powershell
-$env:npm_config_cache = "C:\Users\excal\Documents\deepseek-harness\default-workspace\.npm-cache"
+$env:npm_config_cache = "<workspace>\.npm-cache"
 npm publish --access public --//registry.npmjs.org/:_authToken=$env:NPM_TOKEN
 ```
 
@@ -121,7 +121,7 @@ dsh plugin --profile <profile> add dsh-watch-phone
 assets 都在里面）。
 
 ```powershell
-cd C:\Users\excal\Documents\deepseek-harness\default-workspace\packages\dsh-watch-phone
+cd <workspace>\packages\dsh-watch-phone
 git init -b main
 git add .
 git commit -m "feat: dsh-watch-phone 0.1.1 — 小米手表 5 对话桥"
