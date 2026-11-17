@@ -37,20 +37,46 @@ plugin_manager set_bundle target="dsh-watch-phone" enabled=false   # 收尾卸�
 
 ## 2. 发到 npm
 
-需要 npm 账号（包名 `dsh-watch-phone` 未占用）。有两条路，**优先级从高到低**：
+需要 npm 账号（包名 `dsh-watch-phone` 未占用）。**当前线上走的是路线 A（已跑通）**。
 
-### 路线 A（推荐，长期）：Trusted Publishing，零 token
+### 路线 A（现役）：Trusted Publishing，零 token ✅
 
 npm 从 2026-08 起限制「绕过 2FA 的 token」做账户级操作，**2027-01 起连直接发布也停**。
-长期方案是让 CI 用 OIDC 证明身份，不存任何 token。这个包里已经写好：
+长期方案是让 CI 用 OIDC 证明身份，本仓库已经打通：
 
-`.github/workflows/publish.yml` —— push `v*` tag 就发布，带 `--provenance`。
+- workflow：`.github/workflows/publish.yml`（`id-token: write` + `npm publish --provenance`），
+  支持 `workflow_dispatch` 与 push `v*` tag；
+- npm 侧 Trusted Publisher：`CC2027MK2` / `dsh-watch-phone` / `publish.yml` / **Environment 留空**；
+- 首次发布（0.1.5）已把状态从 `Pending validation` 推到 `Validated`，
+  registry 上有两条 attestation：`.../specs/publish/v0.1` 与 `https://slsa.dev/provenance/v1`。
 
-一次性配置：npmjs.com → 包 `dsh-watch-phone` → Settings → **Trusted Publisher**
-→ 填 GitHub 仓库与 workflow 名 `publish.yml`。之后 `git tag v0.1.2 && git push --tags` 即可。
-本机 `npm 11.9.0` 已支持（需要 ≥ 11.5.1）。
+发一版（本机一条命令）：
 
-### 路线 B（现在就能用）：Granular Access Token
+```powershell
+cd C:\Users\excal\Documents\deepseek-harness\default-workspace\packages
+.\publish.ps1 -Version 0.1.6      # 自检 → sync → gh workflow run → 等 registry 就绪
+```
+
+手动等价操作：
+
+```powershell
+node _sync_file.mjs                                  # 把 package.json 推到 GitHub
+gh workflow run publish.yml --repo CC2027MK2/dsh-watch-phone --ref main
+gh run list --repo CC2027MK2/dsh-watch-phone --limit 1
+```
+
+**发布后别急着验证**：CI 说 success 之后，npm 还要「处理」1-4 分钟
+（日志里是 `Your package is being processed and may take a few minutes`），
+期间 `GET /dsh-watch-phone/<版本>` 会 404、`dist-tags` 还是旧版本，属正常。
+
+注意事项：
+- 本机 `git push` 到 github.com 会被重置（`Recv failure: Connection was reset`），
+  所以同步走 Contents API（见 `.dsh/skills/github-rest-upload`）；
+- npm 11.9.0 **没有** `npm trust` 子命令，Trusted Publisher 只能网页配置；
+- TP 用错会返回 **404**（不是 401/403）：`Signed provenance statement…` + `404 PUT /dsh-watch-phone`
+  同时出现 = 服务端找不到匹配的 TP 记录（仓库名/workflow 名/Environment 三者之一对不上）。
+
+### 路线 B（应急备份）：Granular Access Token
 
 在 **Access Tokens → Generate New Token → Granular**，三个坑：
 
@@ -60,10 +86,13 @@ npm 从 2026-08 起限制「绕过 2FA 的 token」做账户级操作，**2027-0
 3. 能选包范围就只选 `dsh-watch-phone`，期限给 30–90 天。
 
 ```powershell
-$env:NPM_TOKEN = "npm_xxx"
+$env:NPM_PUBLISH_TOKEN = "npm_xxx"
 cd C:\Users\excal\Documents\deepseek-harness\default-workspace\packages
-.\publish.ps1                 # 自检 → pack → publish（默认还会建 GitHub 仓库）
+.\publish.ps1 -Version 0.1.6 -WithToken    # 自检 → pack → token 直发（绕开 CI）
 ```
+
+> Trusted Publishing 已经生效后，这条 token 只当应急用。**用不上了就去
+> `https://www.npmjs.com/settings/<账号>/tokens` 把它 revoke 掉**，别留在磁盘/环境变量里。
 
 交互式（本机有浏览器/OTP）也可以直接：
 
@@ -133,12 +162,21 @@ gh repo edit --add-topic dsh-plugin,deepseek-harness,wearos,voice,tts,stt
 
 ## 5. 之后每次更新
 
-1. 改 `package.json` 版本号（语义化版本）；
-2. `node --check index.js` + `node _smoke.mjs`；
-3. `npm publish`；
-4. 打 tag：`git tag v0.1.2 && git push --tags`。
+1. 改代码，`node --check index.js` + `node _smoke.mjs`；
+2. `cd ..; .\publish.ps1 -Version <新版本>` —— 改版本号、同步、触发 CI、等 registry 就绪；
+3. 想留个 tag 的话在 GitHub 网页或 API 建 `v<版本>` release（tag 也能直接触发 workflow）。
 
 索引里的 `versions[]` 由扫描器更新，`engines.dsh` 变化时记得同步。
+
+### 历史坑位（都踩过）
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `npm publish` 403 要求 2FA | 网页登录 token 不带 bypass 标记 | 走 Trusted Publishing，或建 granular token 勾 Bypass 2FA |
+| 首版 `dist-tags` 是 `0.0.0-stage` | npm 给首次发布放占位版本 | 等 1-2 分钟；`npm deprecate` 掉占位版 |
+| CI success 但 registry 404 | npm 异步处理中 | 轮询 `/dsh-watch-phone/<版本>` 1-4 分钟 |
+| provenance 签了但 `404 PUT` | TP 记录不匹配（404 不是 403） | 核对 owner/repo/workflow 文件名/Environment 留空 |
+| 中文变 `浣犳槸` / BOM | PowerShell `Set-Content -Encoding utf8` | 只用 `write`/`edit` 工具改 UTF-8 源码 |
 
 ## 6. 需要用户提供的东西
 
