@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Watch talk bridge",
+    "description": "Hold-to-talk chat between an Android smartwatch and this DSH: local speech-to-text, local text-to-speech, real DSH sessions, and the watch APK bundled.",
+    "detail": "docs/DETAIL.md"
+  }
+}
