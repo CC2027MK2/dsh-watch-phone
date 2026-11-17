@@ -1,0 +1,10 @@
+- insert:
+    - id: watch-phone
+      name: dsh-watch-phone
+      config:
+        port: 38402
+        token: ''
+        sessionId: watch-voice
+        # /exec and /relay are opt-in: a default install exposes chat + voice only.
+        allowExec: false
+        allowRelay: false
