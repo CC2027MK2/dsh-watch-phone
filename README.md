@@ -57,6 +57,23 @@ The watch has **no `text-to-speech` service and no `SpeechRecognizer`** (Xiaomi 
 which is exactly why all speech work happens on the phone: the watch records a WAV, posts it to
 `/stt`, shows the reply, and plays whatever `/tts` returns.
 
+## Repository layout
+
+| Path | What it is |
+| --- | --- |
+| `index.js`, `cordis.patch.yml`, `locale/`, `docs/`, `icon.svg` | the plugin bundle itself (`dsh.bundle.patch`) |
+| `assets/dsh-watch-chat.apk` | the prebuilt watch client served by `GET /watch/app.apk` |
+| `watch-app/` | full Android source of that client (Gradle project, no keystore) |
+| `pc-bridge/` | the desktop-only predecessor: a PC DSH plugin with Vosk speech-to-text and SAPI text-to-speech, plus the `/relay` TCP helper used to reach a watch's wireless-debugging port from another subnet |
+| `.github/workflows/build-watch-app.yml` | compiles `watch-app/` on every push and uploads the unsigned APK |
+| `.github/workflows/publish.yml` | publishes the bundle to npm through Trusted Publishing (OIDC, no token) |
+
+Everything in this repository is sanitised: addresses are documentation ranges
+(RFC 5737 — `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), Wi-Fi names and hotspot
+passwords are placeholders, and no keystore, device serial or machine path is committed.
+`pc-bridge/` resolves its paths from the file location or from
+`DSH_WATCH_BRIDGE_DIR` / `DSH_PHONE_DIR` / `DSH_PYTHON`.
+
 ## Configuration
 
 Add these keys to the bundle's row config (`cordis.patch.yml`):
