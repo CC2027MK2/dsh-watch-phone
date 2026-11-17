@@ -40,6 +40,23 @@ list of known gateways (`10.180.13.101:38402`, `10.33.28.139:38402`, `192.168.13
 then scans its /24 for port 38402. You can also type an address into the watch — tap the
 status line at the top, or long-press the chat area.
 
+### Build the watch app yourself
+
+The prebuilt APK is only signed with a throwaway key, so rebuild it if you want to change the
+UI. The full Android source lives in [`watch-app/`](watch-app/README.md) — JDK 17, Gradle 8.7
+(wrapper included), SDK 34:
+
+```sh
+cd watch-app
+echo "sdk.dir=/path/to/Android/Sdk" > local.properties
+./gradlew assembleRelease        # add keystore.properties to sign it
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+The watch has **no `text-to-speech` service and no `SpeechRecognizer`** (Xiaomi ships neither),
+which is exactly why all speech work happens on the phone: the watch records a WAV, posts it to
+`/stt`, shows the reply, and plays whatever `/tts` returns.
+
 ## Configuration
 
 Add these keys to the bundle's row config (`cordis.patch.yml`):
