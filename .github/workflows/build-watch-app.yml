@@ -1,8 +1,8 @@
 name: build-watch-app
 
-# Compiles the watch client on every push that touches it, and publishes the
-# resulting (unsigned) APK as a build artifact. Release signing is intentionally
-# not part of CI: the keystore is not in the repository.
+# Compiles the watch client on every push that touches it and publishes the
+# resulting APK as a build artifact. Release signing stays out of CI: the keystore
+# lives on the maintainer's machine, so CI produces an unsigned APK.
 #
 # Manual run: Actions → build-watch-app → Run workflow.
 
@@ -35,13 +35,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # GitHub-hosted runners already ship the Android SDK; installing the two
+      # packages we need is enough, and avoids the setup-android action's
+      # "Failed to find package 'tools'" failure on current SDK repositories.
       - name: Install SDK packages
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" > /dev/null
-          echo "$ANDROID_SDK_ROOT" > local.properties.tmp
+          SDKM="$(dirname "$(find "$ANDROID_SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -n1)")"
+          echo "using sdkmanager at $SDKM"
+          yes | "$SDKM/sdkmanager" --licenses > /dev/null || true
+          "$SDKM/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" > /dev/null
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
       - name: Build release APK
