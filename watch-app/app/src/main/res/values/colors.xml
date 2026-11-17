@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_dark">#FF0D1117</color>
+    <color name="bubble_user">#FF1F6FEB</color>
+    <color name="bubble_assistant">#FF21262D</color>
+    <color name="text_primary">#FFF0F6FC</color>
+    <color name="text_secondary">#FF8B949E</color>
+    <color name="accent">#FF58A6FF</color>
+    <color name="mic_idle">#FF238636</color>
+    <color name="mic_active">#FFF85149</color>
+</resources>

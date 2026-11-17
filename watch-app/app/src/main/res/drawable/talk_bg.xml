@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Primary voice control: a wide pill, deliberately the biggest target on screen. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/mic_idle" />
+    <corners android:radius="28dp" />
+</shape>
