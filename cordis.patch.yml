@@ -1,14 +1,13 @@
 - insert:
-    - id: dsh-peer
-      name: dsh-peer
+    - id: watch-phone
+      name: dsh-watch-phone
       config:
-        # The MCP endpoint lives at http://<host>:<port>/mcp
-        port: 38404
-        # Set a bearer token before exposing this host to an untrusted network;
-        # an empty token keeps the endpoint open (LAN / loopback only).
+        port: 38402
         token: ''
-        # Peer conversation slots become sessions named "<prefix>:<slot>", so a
-        # peer can never address one of your own sessions by accident.
-        sessionPrefix: peer
-        # Upper bound on one peer_ask call, in milliseconds.
-        askTimeoutMs: 240000
+        sessionId: watch-voice
+        # The watch finds the phone on whatever network both share by
+        # broadcasting 'dsh-watch?' to this UDP port.
+        discoveryPort: 38403
+        # /exec and /relay are opt-in: a default install exposes chat + voice only.
+        allowExec: false
+        allowRelay: false

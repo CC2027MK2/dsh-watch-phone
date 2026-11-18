@@ -1,174 +1,197 @@
-# dsh-peer
+# dsh-watch-phone
 
-Let two DeepSeek Harness installations talk to each other.
+Hold-to-talk chat between an **Android smartwatch** — or any other **Android phone** — and **DeepSeek Harness** running on your phone (or on a PC — anything that runs DSH).
 
-`dsh-peer` is a **zero-dependency MCP server** that exposes the local agent as four
-MCP tools. Combined with the stock `@deepseek-ai/dsh-mcp-client`, it turns
-"my laptop's agent" and "my phone's agent" into two peers that can ask each other
-questions over the LAN — no cloud relay, no shared session file.
+Press the green pill, speak, release: the audio is transcribed on the DSH host, the transcript lands in the text box so you can fix what the recogniser misheard, and after you press send it goes to a **real DSH session** (the same one you see in the app, with your preset, persona and model). The reply is spoken back with a local TTS voice. No cloud round-trip for the client itself, and no keyboard on a 240 dp round screen.
 
-```
-   PC (DSH desktop)                          Phone (DSH Go)
-┌──────────────────────────┐             ┌──────────────────────────┐
-│ agent                    │             │ agent                    │
-│   │ tools                │             │   │ tools                │
-│   ├─ @deepseek-ai/       │  MCP/HTTP   │   ├─ dsh-peer            │
-│   │  dsh-mcp-client ─────┼────────────▶│   │  POST /mcp  :38404   │
-│   │  (serverName: phone) │             │   │  → agent.session     │
-│   └──────────────────────┘             │   └──────────────────────┘
-│ dsh-peer  POST /mcp :38404 ◀───────────┼───── dsh-mcp-client      │
-└──────────────────────────┘  MCP/HTTP   └──────────────────────────┘
+One APK serves both: the layout is a two-row composer below 320 dp of width (the watch) and a normal single-row composer above it (every phone), so a second handset can talk to the same bridge without a second build.
+
+```text
+watch APK  ──HTTP──▶  this plugin (0.0.0.0:38402)
+   │                    ├─ POST /chat → DSH agent session → reply text
+   │                    ├─ POST /stt  → ctx.get('speechToText')  (local ASR)
+   │                    └─ POST /tts  → MiMo speech API (local cache) or fallback proxy
+   └─ bundled at /watch/app.apk
 ```
 
-Either side may run `dsh-peer`, either side may run the client, and one side can
-do both (that is how the diagram above is wired).
+## Requirements
 
-## What you get
-
-| Tool (raw name) | Purpose | Input |
-| --- | --- | --- |
-| `peer_ask` | Send a prompt to the peer's agent and wait for its answer | `prompt` (string), `session` (optional), `timeoutMs` (optional) |
-| `peer_sessions` | List conversation slots and their turn counts | – |
-| `peer_history` | Read back the last messages of one slot | `session` (optional), `limit` (optional) |
-| `peer_status` | Host, platform, pid, cwd, current model of the peer | – |
-
-Through `dsh-mcp-client` these become `mcp__<serverName>__peer_ask` and friends,
-for example `mcp__phone__peer_ask` on the PC and `mcp__pc__peer_ask` on the phone.
-
-Each `session` value is a **separate conversation** on the peer: the peer keeps
-one DSH session per slot (`peer:default`, `peer:review`, …) so a review thread does
-not inherit the small-talk context. Calls within one slot are serialised, different
-slots run in parallel.
+- DSH **0.2.1-rc.2 ≤ version < 0.3.0** (tested against 0.2.2-rc.1).
+- For local speech-to-text: a build with the `speechToText` service (e.g. the official
+  `@deepseek-ai/dsh-experimental-speech-to-text-sensevoice` bundle). Without it `/stt`
+  returns 503 and the watch reports “没听清，再说一次”.
+- For local text-to-speech: a Xiaomi MiMo `sk-…` key (`https://api.xiaomimimo.com/v1`),
+  or set `proxyBase` to another machine that answers `/tts`.
+- An Android watch that can run the bundled APK (built and verified on a 480×480
+  round AMOLED watch, Android 14 / armv7).
 
 ## Install
 
-### On a desktop profile
+```sh
+# 1. the bridge
+dsh plugin --profile <your-profile> add dsh-watch-phone
 
-```bash
-npm pack                      # produces dsh-peer-0.1.0.tgz
-dsh plugin --profile desktop install ./dsh-peer-0.1.0.tgz
+# 2. the watch app: the bundle ships the APK, fetch it from the bridge
+curl -O http://<host>:38402/watch/app.apk
+adb install -r app.apk
+adb shell pm grant com.dsh.watchchat android.permission.RECORD_AUDIO
 ```
 
-or, from an agent that has the plugin manager:
+The client finds the host by itself, on whatever network the two devices happen to share —
+hotspot, home Wi-Fi, office Wi-Fi, a new subnet after DHCP moved the phone. In order it tries:
 
-```text
-plugin_manager install_bundle target="file:C:\path\to\dsh-peer-0.1.0.tgz"
+1. the address saved in its settings,
+2. the last addresses that worked (rolling list of 8),
+3. a **UDP broadcast probe** — the bridge answers `dsh-watch?` on port 38403 with
+   `{"service":"dsh-watch-phone","port":38402,"urls":[…]}`,
+4. **mDNS / DNS-SD** — the bridge publishes `_dsh-watch._tcp.local`,
+5. a scan of every local /24 for port 38402,
+6. the documentation-range defaults as a last resort.
+
+Anything it finds is verified with `GET /health` before being adopted, so a stale address is
+never silently kept. You can also type an address in — tap the status line at the top, or
+long-press the chat area.
+
+### Build the watch app yourself
+
+The prebuilt APK is only signed with a throwaway key, so rebuild it if you want to change the
+UI. The full Android source lives in [`watch-app/`](watch-app/README.md) — JDK 17, Gradle 8.7
+(wrapper included), SDK 34:
+
+```sh
+cd watch-app
+echo "sdk.dir=/path/to/Android/Sdk" > local.properties
+./gradlew assembleRelease        # add keystore.properties to sign it
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-A bundle patch installs the server row (`id: dsh-peer`, `port: 38404`) and takes
-effect without restarting the app.
+The watch has **no `text-to-speech` service and no `SpeechRecognizer`** (Xiaomi ships neither),
+which is exactly why all speech work happens on the phone: the watch records a WAV, posts it to
+`/stt`, shows the reply, and plays whatever `/tts` returns.
 
-### On DSH Go (phone)
+## Repository layout
 
-Copy the package into the phone's plugin directory and register the bundle:
+| Path | What it is |
+| --- | --- |
+| `index.js`, `cordis.patch.yml`, `locale/`, `docs/`, `icon.svg` | the plugin bundle itself (`dsh.bundle.patch`) |
+| `assets/dsh-watch-chat.apk` | the prebuilt watch client served by `GET /watch/app.apk` |
+| `watch-app/` | full Android source of that client (Gradle project, no keystore) |
+| `tools/scan-ports.mjs` | finds a watch's random wireless-debugging port (`node tools/scan-ports.mjs <ip>`) |
+| `pc-bridge/` | the desktop-only predecessor: a PC DSH plugin with Vosk speech-to-text and SAPI text-to-speech, plus the `/relay` TCP helper used to reach a watch's wireless-debugging port from another subnet |
+| `.github/workflows/build-watch-app.yml` | compiles `watch-app/` on every push and uploads the unsigned APK |
+| `.github/workflows/publish.yml` | publishes the bundle to npm through Trusted Publishing (OIDC, no token) |
 
-```bash
-# phone-side, inside the Go runtime
-mkdir -p /root/.dsh/dsh-go/plugins/dsh-peer
-tar xzf dsh-peer-0.1.0.tgz -C /tmp && cp -a /tmp/package/. /root/.dsh/dsh-go/plugins/dsh-peer/
-node --check /root/.dsh/dsh-go/plugins/dsh-peer/index.js
-```
-
-Then in `/root/.dsh/profiles/web/package.json` add the dependency and the bundle:
-
-```json
-"dependencies": { "dsh-peer": "link:/root/.dsh/dsh-go/plugins/dsh-peer" },
-"dsh": { "profile": { "bundles": ["...", "dsh-peer"] } }
-```
-
-**Two hard requirements on DSH Go** — both cost an afternoon if you miss them:
-
-1. `link:` dependencies do **not** create the node_modules link. Do it yourself, or the
-   app logs `dsh: skipping profile bundle "dsh-peer": cannot resolve profile bundle`:
-
-   ```bash
-   ln -sfn ../../../dsh-go/plugins/dsh-peer /root/.dsh/profiles/web/node_modules/dsh-peer
-   ```
-
-2. Anything you mount by package **name** (for example
-   `@deepseek-ai/dsh-mcp-client`) must be resolvable from the *profile* directory.
-   The Go runtime keeps its packages under `/opt/dsh/node_modules`, which Node never
-   walks to, so link the packages you need:
-
-   ```bash
-   ln -sfn /opt/dsh/node_modules/@deepseek-ai/dsh-mcp-client \
-          /root/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-mcp-client
-   ```
-
-   Verify with `node -e "import('@deepseek-ai/dsh-mcp-client').then(()=>console.log('ok'))"`
-   **run from the profile directory**.
-
-### Wiring the client
-
-Add one row to the profile's `cordis.patch.yml`. The patch file is a list of patch
-operations, so a **new** entry must be wrapped in `insert:` — a bare `- id: my-row`
-is rejected with `patch: entry "my-row" not found`:
-
-```yaml
-- insert:
-    - id: peer-phone
-      name: "@deepseek-ai/dsh-mcp-client"
-      config:
-        serverName: phone                 # → mcp__phone__* tools
-        transport: streamable-http
-        url: http://203.0.113.42:38404/mcp  # the peer's LAN address
-        toolCallTimeoutMs: 600000          # the peer may wait on a human approval
-```
-
-Check what the loader actually composed before restarting:
-
-```bash
-dsh --profile web --dump-config | grep -A6 'peer-phone'
-```
-
-A desktop install composes its patch list **at boot**; a fresh row needs an app
-restart. DSH Go re-composes on every app start, so a phone-side restart is enough.
+Everything in this repository is sanitised: addresses are documentation ranges
+(RFC 5737 — `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), Wi-Fi names and hotspot
+passwords are placeholders, and no keystore, device serial or machine path is committed.
+`pc-bridge/` resolves its paths from the file location or from
+`DSH_WATCH_BRIDGE_DIR` / `DSH_PHONE_DIR` / `DSH_PYTHON`.
 
 ## Configuration
 
+Add these keys to the bundle's row config (`cordis.patch.yml`):
+
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `port` | `38404` | HTTP port for `/mcp` |
-| `host` | `0.0.0.0` | Bind address |
-| `token` | `''` | When set, every request needs `Authorization: Bearer <token>` |
-| `sessionPrefix` | `peer` | Slot ids are `<prefix>:<session>` |
-| `askTimeoutMs` | `240000` | Default wait inside `peer_ask` |
-| `cwd` | `process.cwd()` | Working directory for peer sessions |
-| `logFile` | `<data dir>/peer.log` | Append-only log next to `health`, `initialize`, `tools/call` |
+| `port` | `38402` | HTTP listen port (all interfaces). |
+| `discoveryPort` | `38403` | UDP port that answers the client's `dsh-watch?` broadcast with the bridge's URLs. |
+| `token` | `''` | When set, every route except `/health`, `/log` and `/watch/app.apk` requires `Authorization: Bearer <token>`. |
+| `sessionId` | `watch-voice` | DSH session id the watch talks to. Reused if it already exists. |
+| `cwd` | `process.cwd()` | Working directory for that session. |
+| `allowExec` | `false` | Enables `POST /exec` (shell on the host). Leave off unless you know why. |
+| `allowRelay` | `false` | Enables `POST /relay` (raw TCP relay, used to reach a watch on another subnet). |
+| `proxyBase` | `''` | Fallback host for `/stt` and `/tts`, e.g. `http://192.0.2.10:38401`. |
+| `logFile` | `<home>/.dsh/watch-phone/bridge.log` | Bridge log; recordings are archived next to it in `rec/`. |
+| `tts.apiKey` | — | MiMo key. If omitted, the plugin reads the `local-voice` plugin's saved settings (`/root/.dsh/dsh-go/plugins/local-voice/data/settings.json`). |
+| `tts.baseURL` | `https://api.xiaomimimo.com/v1` | MiMo endpoint. |
+| `tts.model` | `mimo-v2.5-tts` | Also supports `mimo-v2.5-tts-voicedesign`. |
+| `tts.voice` | `BingTang` | Voice id (e.g. `冰糖`). |
+| `tts.instruction` | `''` | Optional style instruction sent as the first message. |
 
-## Verify a peer without any agent
+Example that keeps the shell off but pins the voice:
 
-`tools/mcp-probe.mjs` is a 100-line MCP client with no dependencies:
-
-```bash
-node tools/mcp-probe.mjs http://203.0.113.42:38404/mcp "介绍一下你自己"
+```yaml
+- id: watch-phone
+  name: dsh-watch-phone
+  config:
+    port: 38402
+    sessionId: watch-voice
+    tts:
+      apiKey: sk-...
+      voice: 冰糖
 ```
 
-It prints `initialize`, `tools/list`, `peer_status`, `peer_history`, a `peer_ask`
-round-trip and the sessions table. On a healthy peer you get one `peer_ask` timing
-and the answer text.
+## HTTP API
 
-`smoke.mjs` runs the same protocol surface against a throwaway
-server with a stub context (`SMOKE_OK`), so it works in CI where no model exists.
+| Route | Method | Body | Result |
+| --- | --- | --- | --- |
+| `/health` | GET | — | `{ ok, service, host, platform, uptime, stt, chat, features }` |
+| `/chat` | POST | `{"text":"…"}` | `{ ok:true, reply }` — goes through a real DSH session when `@deepseek-ai/dsh-agent` is resolvable, otherwise straight to the model |
+| `/stt` | POST | multipart (`audio`) or raw WAV | `{ ok, text, bytes, language, seconds, peak, gain }` |
+| `/tts` | POST | `{"text":"…"}` | `audio/wav` bytes |
+| `/reset` | POST | — | clears the conversation |
+| `/log` | GET | `?lines=80` | tail of the bridge log |
+| `/watch/app.apk` | GET | — | the bundled watch APK |
+| `/exec` | POST | `{"cmd":"…"}` | `{ ok, code, stdout, stderr, ms }` — needs `allowExec` |
+| `/relay` | POST/GET | `{port,targetHost,targetPort}` | starts / lists TCP relays — needs `allowRelay` |
+| `/config` | GET/POST | `{"allowExec":true}` | **loopback only**: read or flip the runtime switches; remembered in `~/.dsh/watch-phone/settings.json` |
 
-## Behaviour that matters
+### Flipping the operator switches on a phone
 
-- **The peer's own approval policy applies.** If the remote agent decides to call a
-  tool, the *user standing at that machine* may get a prompt. A first `peer_ask` can
-  therefore take minutes; keep `toolCallTimeoutMs` well above `askTimeoutMs`.
-- **The peer answers with a fresh session per slot**, created through
-  `agents.create` with the profile's default preset. If the peer cannot create an
-  agent it falls back to a plain `llm.stream()` call, which has no tools and no
-  memory — useful for a smoke test, not for work.
-- **LAN addresses drift** (a DHCP lease today, something else after a reboot).
-  Treat `url` as configuration: update it and restart, or give the host a DHCP
-  reservation.
-- **Security**: the server is trusted-LAN only by default. Anyone who can reach the
-  port can drive an agent on your machine. Set `token` when the network is shared,
-  and never expose the port to the internet.
-- **One transport per connection.** `GET /mcp` answers `405` on purpose: this server
-  sends no server-initiated stream, so the client must use plain request/response.
+`allowExec` and `allowRelay` deliberately cannot be turned on from the LAN. On a phone you
+reach loopback with adb, so the switch stays available without exposing it:
+
+```sh
+adb forward tcp:13842 tcp:38402
+curl -s http://127.0.0.1:13842/config                                  # read
+curl -s -X POST http://127.0.0.1:13842/config -d '{"allowExec":true}'  # enable
+```
+
+This is how the watch is deployed over a hotspot: `allowRelay` lets the host open a TCP
+tunnel to the watch's wireless-debugging port while `adb` stays on the PC.
+
+
+## Verified on hardware
+
+Last end-to-end run: **2026-11-18**, bundle `0.1.8`.
+
+| What | Setup | Result |
+| --- | --- | --- |
+| Cross-subnet discovery | watch on the phone's own hotspot (10.x), bridge on the Wi-Fi address | watch broadcast `dsh-watch?`, got the URL list, `GET /health` 200, chat round-trip |
+| Second handset as a client | another Android phone on the same Wi-Fi as the bridge | discovered over broadcast with no configuration, phone layout (single-row composer), chat round-trip |
+| Third-party probe | PC on the same Wi-Fi, raw UDP | reply listed **all three** interfaces: hotspot, Wi-Fi and cellular |
+| Local ASR | synthesised Mandarin WAV posted to `/stt` | `{"text":"今天天气怎么样？","seconds":2.45}`, `sensevoice-local`, `language:auto` |
+| Dictation does not send | held the watch microphone while audio played nearby | transcript appeared in the input box + toast, chat area stayed empty — nothing was sent |
+| One session everywhere | watch, phone and second handset at once | all three talk to the same `watch-voice` session, so the history is shared by design |
+
+Two device-side quirks worth knowing when you automate a deployment: a Xiaomi/HyperOS phone
+refuses `adb install` until *Settings → Developer options → Install via USB* is allowed, and
+`adb shell input text` does not reach text fields unless *USB debugging (Security settings)*
+is on. Neither affects the app itself.
+
+## Notes and limits
+
+- **Speech never sends itself.** The transcript is written into the input box (cursor at the
+  end) and a toast says so; you read it, fix it, then press send. That is the difference
+  between a dictation shortcut and a chat app that mis-sends a garbled question.
+- Discovery needs the two devices on the same L2 segment for the broadcast/mDNS steps; the
+  /24 scan covers most home and office networks, and the manual address entry always works.
+  Some Android builds drop broadcast UDP with the screen off — that is why the saved and
+  recent addresses are tried first, and why mDNS and the /24 scan are kept as fallbacks.
+- `/stt` normalises any WAV to 16 kHz mono 16-bit and lifts quiet recordings
+  (`peak < 6000` → up to 40× gain), because watch microphones record very low.
+- The reply is read from the **last assistant message of the finished turn**, and only its
+  `text` parts — reasoning and tool calls are never spoken.
+- Sessions are real DSH sessions: the chat shows up in the app's sidebar with an
+  auto-generated title, your preset, persona and model. If a session log is ever corrupted
+  by an older version, delete `<dsh home>/sessions/*/<sessionId>` and it is recreated.
+- The bridge is plain HTTP on your LAN; set `token` if the network is not trusted, and keep
+  `allowExec`/`allowRelay` off by default.
+- Verified end-to-end on a Xiaomi Watch 5 (M2505W1) with Android 14 talking to DSH Go on
+  Android: watch microphone → local sensevoice ASR (0.2–0.8 s warm) → DSH session → MiMo
+  TTS (24 kHz WAV) → watch speaker. Other watches/ABIs are untested.
 
 ## License
 
-MIT.
+MIT. The bundled APK is built from `watch-app/` in the same project and carries the same
+license; see `assets/SOURCE.md`.

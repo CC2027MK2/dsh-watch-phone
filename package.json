@@ -1,10 +1,17 @@
 {
-  "name": "dsh-peer",
-  "version": "0.1.0",
-  "description": "Expose this DSH host's agents over MCP (streamable HTTP) so the DSH on another machine can drive them as tools.",
+  "name": "dsh-watch-phone",
+  "version": "0.1.8",
+  "description": "Hold-to-talk chat between an Android smartwatch and DeepSeek Harness on your phone: local speech-to-text, local TTS, real DSH sessions, and the watch APK bundled in.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CC2027MK2/dsh-watch-phone.git"
+  },
+  "homepage": "https://github.com/CC2027MK2/dsh-watch-phone#readme",
+  "bugs": {
+    "url": "https://github.com/CC2027MK2/dsh-watch-phone/issues"
+  },
   "type": "module",
   "license": "MIT",
-  "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./locale/*.json": "./locale/*.json",
@@ -13,31 +20,40 @@
   "files": [
     "index.js",
     "cordis.patch.yml",
-    "locale",
+    "locale/*.json",
+    "docs",
     "icon.svg",
+    "assets",
     "README.md",
-    "LICENSE",
-    "smoke.mjs",
-    "tools"
+    "LICENSE"
   ],
   "keywords": [
     "dsh-plugin",
-    "dsh",
-    "mcp",
-    "model-context-protocol",
-    "agent",
-    "peer",
-    "collaboration"
+    "deepseek-harness",
+    "smartwatch",
+    "wearable",
+    "hold-to-talk",
+    "speech-to-text",
+    "text-to-speech"
   ],
-  "scripts": {
-    "smoke": "node smoke.mjs"
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   },
   "engines": {
     "dsh": ">=0.2.1-rc.2 <0.3.0-0"
   },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent": "*",
+    "@deepseek-ai/dsh-llm": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
     }
   }
 }

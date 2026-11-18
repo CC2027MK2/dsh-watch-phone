@@ -1,4 +1,10 @@
-node_modules/
+# Build artifacts from `npm pack`
 *.tgz
+
+# Local dependencies / caches
+node_modules/
+.npm-cache/
+
+# Local runtime data
+.dsh/
 *.log
-.DS_Store
