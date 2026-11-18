@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Watch (240dp round) metrics. Overridden in values-sw320dp for phones. -->
+<resources>
+    <dimen name="bubble_text_size">13sp</dimen>
+    <dimen name="bubble_max_width">160dp</dimen>
+    <dimen name="bubble_pad_horizontal">16dp</dimen>
+    <dimen name="bubble_pad_vertical">10dp</dimen>
+</resources>

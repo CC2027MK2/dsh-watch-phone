@@ -5,6 +5,9 @@
         port: 38402
         token: ''
         sessionId: watch-voice
+        # The watch finds the phone on whatever network both share by
+        # broadcasting 'dsh-watch?' to this UDP port.
+        discoveryPort: 38403
         # /exec and /relay are opt-in: a default install exposes chat + voice only.
         allowExec: false
         allowRelay: false

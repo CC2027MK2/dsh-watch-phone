@@ -20,6 +20,7 @@
 import http from 'node:http'
 import fs from 'node:fs'
 import net from 'node:net'
+import dgram from 'node:dgram'
 import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
@@ -716,12 +717,232 @@ async function synthesizeLocal(text, tts = {}) {
   return buf
 }
 
+/** Local IPv4 addresses (LAN only, no loopback). */
+function localAddresses () {
+  const out = []
+  try {
+    for (const addrs of Object.values(os.networkInterfaces())) {
+      for (const addr of addrs ?? []) {
+        if (addr.family === 'IPv4' && !addr.internal) out.push(addr.address)
+      }
+    }
+  } catch {
+    /* best effort */
+  }
+  return out
+}
+
+/**
+ * UDP broadcast beacon: the fastest way for a client on the same network to
+ * find this bridge. A client broadcasts the probe string and gets back a JSON
+ * document with the HTTP URLs to try. Unlike mDNS this needs no privileged
+ * port, so it also works inside a phone-side container.
+ *
+ * @param {number} port HTTP port to advertise
+ * @param {number} udpPort port to listen on
+ * @param {(msg: string) => void} log
+ * @returns {() => void} stop function
+ */
+function startUdpBeacon (port, udpPort, log) {
+  const PROBE = 'dsh-watch?'
+  let socket
+  try {
+    socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+  } catch (err) {
+    log(`udp: cannot create socket (${err.message})`)
+    return () => {}
+  }
+
+  socket.on('error', (err) => {
+    log(`udp: socket error ${err.message}`)
+  })
+
+  socket.on('message', (msg, rinfo) => {
+    try {
+      if (!msg.length || msg.toString('utf8').trim() !== PROBE) return
+      const urls = localAddresses().map((ip) => `http://${ip}:${port}`)
+      const payload = JSON.stringify({ ok: true, service: 'dsh-watch-phone', port, urls })
+      socket.send(payload, rinfo.port, rinfo.address, (err) => {
+        if (err) log(`udp: reply failed ${err.message}`)
+      })
+      log(`udp: answered discovery from ${rinfo.address} -> ${urls.join(',')}`)
+    } catch (err) {
+      log(`udp: handler error ${err.message}`)
+    }
+  })
+
+  socket.bind(udpPort, () => {
+    try {
+      socket.setBroadcast(true)
+      log(`udp: discovery beacon listening on 0.0.0.0:${udpPort}`)
+    } catch (err) {
+      log(`udp: setBroadcast failed ${err.message}`)
+    }
+  })
+
+  return () => {
+    try { socket.close() } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Minimal mDNS/DNS-SD responder so clients on the same network can find the
+ * bridge without knowing an IP address. Publishes:
+ *   PTR  _dsh-watch._tcp.local  -> <host>._dsh-watch._tcp.local
+ *   SRV  <host>._dsh-watch._tcp.local  -> host, port
+ *   TXT  <host>._dsh-watch._tcp.local  -> service=dsh-watch-phone, version=...
+ *
+ * This is a tiny implementation (no external dependency): it answers queries
+ * addressed to 224.0.0.251:5353 for our instance. It is best-effort — when the
+ * socket cannot be bound (no permission, port taken) we simply run without it.
+ *
+ * @param {number} port the HTTP port to advertise
+ * @param {(msg: string) => void} log
+ * @returns {() => void} stop function
+ */
+function startMdnsResponder (port, log) {
+  const MDNS_ADDR = '224.0.0.251'
+  const MDNS_PORT = 5353
+  const SERVICE_TYPE = '_dsh-watch._tcp.local'
+  const instanceName = 'dsh-watch-phone'
+  const hostName = instanceName + '.local'
+  const TTL = 120
+
+  function encodeName (name) {
+    const parts = []
+    for (const label of name.split('.')) {
+      if (!label) continue
+      parts.push(Buffer.from([label.length]), Buffer.from(label, 'utf8'))
+    }
+    parts.push(Buffer.from([0]))
+    return Buffer.concat(parts)
+  }
+
+  function encodeTxt (entries) {
+    const parts = []
+    for (const entry of entries) {
+      const b = Buffer.from(entry, 'utf8')
+      parts.push(Buffer.from([b.length]), b)
+    }
+    return Buffer.concat(parts)
+  }
+
+  function parseQuestion (msg) {
+    let offset = 12
+    const labels = []
+    while (offset < msg.length) {
+      const len = msg[offset]
+      if (len === 0) { offset += 1; break }
+      if ((len & 0xc0) === 0xc0) { offset += 2; break }
+      labels.push(msg.slice(offset + 1, offset + 1 + len).toString('utf8'))
+      offset += 1 + len
+    }
+    if (offset + 4 > msg.length) return null
+    return { name: labels.join('.'), qtype: msg.readUInt16BE(offset) }
+  }
+
+  const TXT = encodeTxt(['service=dsh-watch-phone', 'path=/watch'])
+
+  function buildAnswer (question) {
+    const name = question.name.toLowerCase()
+    const instanceFqdn = instanceName + '.' + SERVICE_TYPE
+    const isService = name === SERVICE_TYPE
+    const isInstance = name === instanceFqdn
+    const isHost = name === hostName
+    const records = []
+
+    const push = (type, owner, rdata) => {
+      const header = Buffer.alloc(10)
+      header.writeUInt16BE(type, 0)
+      header.writeUInt16BE(1, 2)
+      header.writeUInt32BE(TTL, 4)
+      header.writeUInt16BE(rdata.length, 8)
+      records.push(Buffer.concat([encodeName(owner), header, rdata]))
+    }
+
+    if (isService || question.qtype === 12) {
+      push(12, SERVICE_TYPE, encodeName(instanceFqdn))
+    }
+    if (isService || isInstance) {
+      const srv = Buffer.alloc(6)
+      srv.writeUInt16BE(0, 0)
+      srv.writeUInt16BE(0, 2)
+      srv.writeUInt16BE(port, 4)
+      push(33, instanceFqdn, Buffer.concat([srv, encodeName(hostName)]))
+      push(16, instanceFqdn, TXT)
+    }
+    if (isHost) {
+      for (const ip of localAddresses()) {
+        const parts = ip.split('.').map((n) => Number(n))
+        if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+          push(1, hostName, Buffer.from(parts))
+        }
+      }
+    }
+    return records
+  }
+
+  let socket
+  try {
+    socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
+  } catch (err) {
+    log(`mdns: cannot create socket (${err.message})`)
+    return () => {}
+  }
+
+  socket.on('error', (err) => {
+    log(`mdns: socket error ${err.message}`)
+  })
+
+  socket.on('message', (msg, rinfo) => {
+    try {
+      if (msg.length < 12) return
+      if ((msg.readUInt16BE(2) & 0x8000) !== 0) return
+      if (msg.readUInt16BE(4) < 1) return
+      const question = parseQuestion(msg)
+      if (!question) return
+      const answers = buildAnswer(question)
+      if (!answers.length) return
+
+      const header = Buffer.alloc(12)
+      header.writeUInt16BE(0, 0)
+      header.writeUInt16BE(0x8400, 2)
+      header.writeUInt16BE(0, 4)
+      header.writeUInt16BE(answers.length, 6)
+      header.writeUInt16BE(0, 8)
+      header.writeUInt16BE(0, 10)
+
+      socket.send(Buffer.concat([header, ...answers]), rinfo.port, rinfo.address, (err) => {
+        if (err) log(`mdns: send failed ${err.message}`)
+      })
+    } catch (err) {
+      log(`mdns: handler error ${err.message}`)
+    }
+  })
+
+  socket.bind(MDNS_PORT, () => {
+    try {
+      socket.addMembership(MDNS_ADDR)
+      socket.setMulticastTTL(255)
+      socket.setMulticastLoopback(true)
+      log(`mdns: advertising ${instanceName}.${SERVICE_TYPE} for port ${port}`)
+    } catch (err) {
+      log(`mdns: multicast join failed ${err.message}`)
+    }
+  })
+
+  return () => {
+    try { socket.close() } catch { /* ignore */ }
+  }
+}
+
 export const name = 'dsh-watch-phone'
 
 export function apply(ctx, config = {}) {
   const port = Number(config.port ?? DEFAULT_PORT)
   const token = typeof config.token === 'string' ? config.token : ''
   const proxyBase = typeof config.proxyBase === 'string' ? config.proxyBase : ''
+  const discoveryPort = Number(config.discoveryPort ?? 38403)
   const tts = config.tts && typeof config.tts === 'object' ? config.tts : {}
   const DATA_DIR = process.env.DSH_WATCH_PHONE_DATA ?? path.join(os.homedir(), '.dsh', 'watch-phone')
   const logFile = config.logFile ?? path.join(DATA_DIR, 'bridge.log')
@@ -1127,8 +1348,13 @@ export function apply(ctx, config = {}) {
     log(`server error: ${err?.message ?? err}`)
   })
 
+  let stopMdns = () => {}
+  let stopBeacon = () => {}
+
   server.listen(port, '0.0.0.0', () => {
     log(`server listening on 0.0.0.0:${port}`)
+    stopMdns = startMdnsResponder(port, log)
+    stopBeacon = startUdpBeacon(port, discoveryPort, log)
     const nets = os.networkInterfaces()
     for (const [name, addrs] of Object.entries(nets)) {
       for (const addr of addrs ?? []) {
@@ -1152,6 +1378,16 @@ export function apply(ctx, config = {}) {
 
   ctx.on('dispose', () => {
     log('dispose: closing server')
+    try {
+      stopMdns()
+    } catch {
+      /* ignore */
+    }
+    try {
+      stopBeacon()
+    } catch {
+      /* ignore */
+    }
     try {
       server.close()
     } catch {

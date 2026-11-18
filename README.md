@@ -1,8 +1,10 @@
 # dsh-watch-phone
 
-Hold-to-talk chat between an **Android smartwatch** and **DeepSeek Harness** running on your phone (or on a PC — anything that runs DSH).
+Hold-to-talk chat between an **Android smartwatch** — or any other **Android phone** — and **DeepSeek Harness** running on your phone (or on a PC — anything that runs DSH).
 
-Press the green pill on the watch, speak, release: the audio is transcribed on the DSH host, sent to a **real DSH session** (the same one you see in the app, with your preset, persona and model), and the reply is spoken back with a local TTS voice. No cloud round-trip for the watch itself, and no keyboard on a 240 dp round screen.
+Press the green pill, speak, release: the audio is transcribed on the DSH host, the transcript lands in the text box so you can fix what the recogniser misheard, and after you press send it goes to a **real DSH session** (the same one you see in the app, with your preset, persona and model). The reply is spoken back with a local TTS voice. No cloud round-trip for the client itself, and no keyboard on a 240 dp round screen.
+
+One APK serves both: the layout is a two-row composer below 320 dp of width (the watch) and a normal single-row composer above it (every phone), so a second handset can talk to the same bridge without a second build.
 
 ```text
 watch APK  ──HTTP──▶  this plugin (0.0.0.0:38402)
@@ -35,10 +37,20 @@ adb install -r app.apk
 adb shell pm grant com.dsh.watchchat android.permission.RECORD_AUDIO
 ```
 
-The watch discovers the host by itself: it tries the address saved in its settings, then a
-list of known gateways (`203.0.113.1:38402`, `198.51.100.20:38402`, `192.0.2.1:38402`),
-then scans its /24 for port 38402. You can also type an address into the watch — tap the
-status line at the top, or long-press the chat area.
+The client finds the host by itself, on whatever network the two devices happen to share —
+hotspot, home Wi-Fi, office Wi-Fi, a new subnet after DHCP moved the phone. In order it tries:
+
+1. the address saved in its settings,
+2. the last addresses that worked (rolling list of 8),
+3. a **UDP broadcast probe** — the bridge answers `dsh-watch?` on port 38403 with
+   `{"service":"dsh-watch-phone","port":38402,"urls":[…]}`,
+4. **mDNS / DNS-SD** — the bridge publishes `_dsh-watch._tcp.local`,
+5. a scan of every local /24 for port 38402,
+6. the documentation-range defaults as a last resort.
+
+Anything it finds is verified with `GET /health` before being adopted, so a stale address is
+never silently kept. You can also type an address in — tap the status line at the top, or
+long-press the chat area.
 
 ### Build the watch app yourself
 
@@ -81,6 +93,7 @@ Add these keys to the bundle's row config (`cordis.patch.yml`):
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `port` | `38402` | HTTP listen port (all interfaces). |
+| `discoveryPort` | `38403` | UDP port that answers the client's `dsh-watch?` broadcast with the bridge's URLs. |
 | `token` | `''` | When set, every route except `/health`, `/log` and `/watch/app.apk` requires `Authorization: Bearer <token>`. |
 | `sessionId` | `watch-voice` | DSH session id the watch talks to. Reused if it already exists. |
 | `cwd` | `process.cwd()` | Working directory for that session. |
@@ -139,6 +152,13 @@ tunnel to the watch's wireless-debugging port while `adb` stays on the PC.
 
 ## Notes and limits
 
+- **Speech never sends itself.** The transcript is written into the input box (cursor at the
+  end) and a toast says so; you read it, fix it, then press send. That is the difference
+  between a dictation shortcut and a chat app that mis-sends a garbled question.
+- Discovery needs the two devices on the same L2 segment for the broadcast/mDNS steps; the
+  /24 scan covers most home and office networks, and the manual address entry always works.
+  Some Android builds drop broadcast UDP with the screen off — that is why the saved and
+  recent addresses are tried first, and why mDNS and the /24 scan are kept as fallbacks.
 - `/stt` normalises any WAV to 16 kHz mono 16-bit and lifts quiet recordings
   (`peak < 6000` → up to 40× gain), because watch microphones record very low.
 - The reply is read from the **last assistant message of the finished turn**, and only its

@@ -1,17 +1,18 @@
 package com.dsh.watchchat;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
+import android.speech.RecognitionListener;import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.text.TextUtils;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
@@ -65,8 +66,16 @@ public class MainActivity extends AppCompatActivity {
     /** Offline TTS engine on HyperOS: com.xiaomi.mibrain.speech (小爱语音). */
     /** Ports probed by the LAN auto-discovery fallback, in priority order. */
     private static final int[] DISCOVERY_PORTS = {38402, 38401, 38400};
+    /**
+     * The bridge answers a broadcast probe on this UDP port, which is how the
+     * watch finds the phone after either of them changes network.
+     */
+    private static final int DISCOVERY_PORT = 38403;
+    /** DNS-SD service the bridge publishes while it is listening. */
+    private static final String MDNS_SERVICE_TYPE = "_dsh-watch._tcp.local";
     private static final String PREFS_NAME = "watchchat";
     private static final String KEY_SERVER = "server_url";
+    private static final String KEY_RECENT = "recent_servers";
     private static final String KEY_TOKEN = "auth_token";
     private static final int PERMISSION_REQUEST_AUDIO = 100;
 
@@ -365,7 +374,7 @@ public class MainActivity extends AppCompatActivity {
         }, "mic-arm").start();
     }
 
-    /** Finger up: stop, transcribe on the phone, and send the transcript. */
+    /** Finger up: stop, transcribe on the phone, and put the text in the box. */
     private void endHold() {
         if (micArming) {
             releasedWhileArming = true;
@@ -398,11 +407,17 @@ public class MainActivity extends AppCompatActivity {
         new Thread(() -> {
             try {
                 String text = SttUploader.upload(serverUrl, f, token == null ? "" : token);
+                final String draft = text == null ? "" : text.trim();
                 runOnUiThread(() -> {
                     showMicSpinner(false);
                     statusText.setVisibility(View.GONE);
-                    if (text != null && !text.isEmpty()) {
-                        sendMessage(text);
+                    if (!draft.isEmpty()) {
+                        // Speech goes through the same box as typing: the user
+                        // reads it, fixes what the transcriber got wrong, and
+                        // only then presses send.
+                        inputText.setText(draft);
+                        inputText.setSelection(draft.length());
+                        Toast.makeText(this, "语音已填入输入框，检查后按发送", Toast.LENGTH_SHORT).show();
                     } else {
                         Toast.makeText(this, "没听清，再说一次", Toast.LENGTH_SHORT).show();
                     }
@@ -520,32 +535,205 @@ public class MainActivity extends AppCompatActivity {
         return raw;
     }
 
-    private void checkConnection() {
-        networkExecutor.execute(() -> {
-            boolean ok = probeHealth(serverUrl);
-            if (!ok) {
-                // Saved address is stale (DHCP moved the phone): try the known ones.
-                for (String candidate : KNOWN_SERVERS) {
-                    if (probeHealth(candidate)) {
-                        serverUrl = candidate;
-                        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                                .putString(KEY_SERVER, serverUrl).apply();
-                        ok = true;
-                        break;
-                    }
+    /**
+     * Find the bridge no matter which network both devices happen to share:
+     *  1. the saved address,
+     *  2. the rolling list of previously-good addresses,
+     *  3. a UDP broadcast probe (fast, needs no mDNS and no multicast lock),
+     *  4. mDNS (_dsh-watch._tcp) when the network passes multicast,
+     *  5. the /24 of every local interface,
+     *  6. the hard-coded documentation ranges, as a last resort.
+     */
+    private String locateBridge() {
+        if (probeHealth(serverUrl)) return serverUrl;
+        for (String candidate : recentServers()) {
+            if (!candidate.equals(serverUrl) && probeHealth(candidate)) return candidate;
+        }
+        String broadcast = discoverViaBroadcast();
+        if (broadcast != null) return broadcast;
+        String mdns = discoverViaMdns();
+        if (mdns != null) return mdns;
+        String scan = discoverServer();
+        if (scan != null) return scan;
+        for (String candidate : KNOWN_SERVERS) {
+            if (probeHealth(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    /** @return the rolling list of previously-good bridge URLs, newest first. */
+    private java.util.List<String> recentServers() {
+        String raw = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_RECENT, "");
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (raw == null || raw.isEmpty()) return out;
+        int i = 0;
+        while (i < raw.length()) {
+            int q = raw.indexOf('"', i);
+            if (q < 0) break;
+            int end = raw.indexOf('"', q + 1);
+            if (end < 0) break;
+            out.add(raw.substring(q + 1, end));
+            i = end + 1;
+        }
+        return out;
+    }
+
+    /** Remember a working bridge address, newest first, at most 8 entries. */
+    private void saveServerUrl(String url) {
+        java.util.List<String> list = new java.util.ArrayList<>(recentServers());
+        list.remove(url);
+        list.add(0, url);
+        while (list.size() > 8) list.remove(list.size() - 1);
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < list.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append('"').append(list.get(i)).append('"');
+        }
+        sb.append(']');
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putString(KEY_SERVER, url)
+                .putString(KEY_RECENT, sb.toString())
+                .apply();
+    }
+
+    /**
+     * Broadcast a UDP probe and use the first answer that also passes /health.
+     * Unlike mDNS this needs no multicast lock and no privileged port, so it
+     * keeps working across tethering, hotspot and ordinary Wi-Fi unchanged.
+     */
+    private String discoverViaBroadcast() {
+        java.net.DatagramSocket socket = null;
+        try {
+            socket = new java.net.DatagramSocket();
+            socket.setBroadcast(true);
+            socket.setSoTimeout(300);
+            byte[] probe = "dsh-watch?".getBytes("UTF-8");
+            sendProbe(socket, probe, "255.255.255.255");
+            for (String bcast : broadcastAddresses()) {
+                sendProbe(socket, probe, bcast);
+            }
+            long deadline = System.currentTimeMillis() + 1800L;
+            byte[] buf = new byte[2048];
+            while (System.currentTimeMillis() < deadline) {
+                java.net.DatagramPacket in = new java.net.DatagramPacket(buf, buf.length);
+                try {
+                    socket.receive(in);
+                } catch (java.net.SocketTimeoutException te) {
+                    continue;
+                }
+                String text = new String(in.getData(), 0, in.getLength(), "UTF-8");
+                String url = firstHealthyUrl(text);
+                if (url != null) return url;
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (socket != null) socket.close();
+        }
+        return null;
+    }
+
+    private void sendProbe(java.net.DatagramSocket socket, byte[] probe, String host) {
+        try {
+            socket.send(new java.net.DatagramPacket(probe, probe.length,
+                    java.net.InetAddress.getByName(host), DISCOVERY_PORT));
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Pull the first healthy URL out of the bridge's JSON discovery answer. */
+    private String firstHealthyUrl(String text) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"urls\"\\s*:\\s*\\[([^\\]]*)\\]")
+                .matcher(text);
+        if (!m.find()) return null;
+        for (String part : m.group(1).split(",")) {
+            String url = part.trim().replace("\"", "");
+            if (url.startsWith("http") && probeHealth(url)) return url;
+        }
+        return null;
+    }
+
+    /** Broadcast addresses of the local IPv4 interfaces. */
+    private java.util.List<String> broadcastAddresses() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        try {
+            java.util.List<java.net.NetworkInterface> all =
+                    java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces());
+            for (java.net.NetworkInterface nif : all) {
+                if (!nif.isUp() || nif.isLoopback()) continue;
+                for (java.net.InterfaceAddress ia : nif.getInterfaceAddresses()) {
+                    java.net.InetAddress b = ia.getBroadcast();
+                    if (b instanceof java.net.Inet4Address) out.add(b.getHostAddress());
                 }
             }
-            if (!ok) {
-                runOnUiThread(() -> {
-                    statusText.setVisibility(View.VISIBLE);
-                    statusText.setText(R.string.disconnected);
-                });
-                String found = discoverServer();
-                if (found != null) {
-                    serverUrl = found;
-                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(KEY_SERVER, serverUrl).apply();
-                    ok = true;
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    /**
+     * Ask the system for the bridge over DNS-SD. While the bridge is listening
+     * it publishes _dsh-watch._tcp; NsdManager resolves it to a host and port on
+     * the current network with no configuration at all.
+     */
+    private String discoverViaMdns() {
+        final android.net.nsd.NsdManager nsd =
+                (android.net.nsd.NsdManager) getSystemService(Context.NSD_SERVICE);
+        if (nsd == null) return null;
+        final Object lock = new Object();
+        final String[] result = new String[1];
+        android.net.nsd.NsdManager.DiscoveryListener listener =
+                new android.net.nsd.NsdManager.DiscoveryListener() {
+                    @Override public void onDiscoveryStarted(String regType) { }
+                    @Override public void onDiscoveryStopped(String serviceType) { }
+                    @Override public void onServiceFound(android.net.nsd.NsdServiceInfo service) {
+                        try {
+                            nsd.resolveService(service, new android.net.nsd.NsdManager.ResolveListener() {
+                                @Override public void onServiceResolved(android.net.nsd.NsdServiceInfo info) {
+                                    int port = info.getPort();
+                                    java.net.InetAddress host = info.getHost();
+                                    if (host != null && port > 0) {
+                                        String base = "http://" + host.getHostAddress() + ":" + port;
+                                        if (probeHealth(base)) {
+                                            synchronized (lock) {
+                                                result[0] = base;
+                                                lock.notifyAll();
+                                            }
+                                        }
+                                    }
+                                }
+                                @Override public void onResolveFailed(android.net.nsd.NsdServiceInfo info, int code) { }
+                            });
+                        } catch (Exception ignored) { }
+                    }
+                    @Override public void onServiceLost(android.net.nsd.NsdServiceInfo service) { }
+                    @Override public void onStartDiscoveryFailed(String serviceType, int code) { }
+                    @Override public void onStopDiscoveryFailed(String serviceType, int code) { }
+                };
+        try {
+            nsd.discoverServices(MDNS_SERVICE_TYPE,
+                    android.net.nsd.NsdManager.PROTOCOL_DNS_SD, listener);
+            synchronized (lock) {
+                try {
+                    lock.wait(4000);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
                 }
+            }
+            try {
+                nsd.stopServiceDiscovery(listener);
+            } catch (Exception ignored) { }
+        } catch (Exception ignored) { }
+        return result[0];
+    }
+
+    private void checkConnection() {
+        networkExecutor.execute(() -> {
+            String found = locateBridge();
+            final boolean ok = found != null;
+            if (ok) {
+                serverUrl = found;
+                saveServerUrl(serverUrl);
             }
             final boolean connected = ok;
             runOnUiThread(() -> {
@@ -663,9 +851,12 @@ public class MainActivity extends AppCompatActivity {
     private void addBubble(String text, boolean isUser) {
         TextView bubble = new TextView(this);
         bubble.setText(text);
-        bubble.setTextSize(13);
+        bubble.setTextSize(TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.bubble_text_size));
         bubble.setTextColor(getResources().getColor(R.color.text_primary));
-        bubble.setPadding(16, 10, 16, 10);
+        int padH = Math.round(getResources().getDimension(R.dimen.bubble_pad_horizontal));
+        int padV = Math.round(getResources().getDimension(R.dimen.bubble_pad_vertical));
+        bubble.setPadding(padH, padV, padH, padV);
         bubble.setBackgroundResource(isUser ? R.drawable.bubble_user : R.drawable.bubble_assistant);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -673,7 +864,8 @@ public class MainActivity extends AppCompatActivity {
         lp.setMargins(8, 4, 8, 4);
         lp.gravity = isUser ? Gravity.END : Gravity.START;
         bubble.setLayoutParams(lp);
-        bubble.setMaxWidth(320);
+        // 160dp on the watch, 280dp on a phone: never wider than the display.
+        bubble.setMaxWidth(Math.round(getResources().getDimension(R.dimen.bubble_max_width)));
 
         chatContainer.addView(bubble);
         chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
