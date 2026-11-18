@@ -67,6 +67,14 @@ adb shell am start -n com.dsh.watchchat/.MainActivity
 > 装完改过服务地址的话，`pm clear` 才能清掉旧地址；`pm clear` 同时会清掉麦克风授权，
 > 记得补一次 `pm grant … RECORD_AUDIO`。
 
+**找不到端口时**：无线调试的 `adb connect` 端口是随机的（只有配对端口是固定的短端口）。
+在能连到手表的那台机器上扫一下即可：
+
+```bash
+node ../tools/scan-ports.mjs <watch-ip>          # 默认 30000-50000
+# {"host":"…","scanned":20001,"open":[41543]}
+```
+
 ## 服务地址与发现
 
 APK 里内置几个候选地址（文档保留段，仅作最后兜底），启动时按这个顺序找桥：

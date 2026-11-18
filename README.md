@@ -76,6 +76,7 @@ which is exactly why all speech work happens on the phone: the watch records a W
 | `index.js`, `cordis.patch.yml`, `locale/`, `docs/`, `icon.svg` | the plugin bundle itself (`dsh.bundle.patch`) |
 | `assets/dsh-watch-chat.apk` | the prebuilt watch client served by `GET /watch/app.apk` |
 | `watch-app/` | full Android source of that client (Gradle project, no keystore) |
+| `tools/scan-ports.mjs` | finds a watch's random wireless-debugging port (`node tools/scan-ports.mjs <ip>`) |
 | `pc-bridge/` | the desktop-only predecessor: a PC DSH plugin with Vosk speech-to-text and SAPI text-to-speech, plus the `/relay` TCP helper used to reach a watch's wireless-debugging port from another subnet |
 | `.github/workflows/build-watch-app.yml` | compiles `watch-app/` on every push and uploads the unsigned APK |
 | `.github/workflows/publish.yml` | publishes the bundle to npm through Trusted Publishing (OIDC, no token) |
@@ -149,6 +150,24 @@ curl -s -X POST http://127.0.0.1:13842/config -d '{"allowExec":true}'  # enable
 This is how the watch is deployed over a hotspot: `allowRelay` lets the host open a TCP
 tunnel to the watch's wireless-debugging port while `adb` stays on the PC.
 
+
+## Verified on hardware
+
+Last end-to-end run: **2026-11-18**, bundle `0.1.8`.
+
+| What | Setup | Result |
+| --- | --- | --- |
+| Cross-subnet discovery | watch on the phone's own hotspot (10.x), bridge on the Wi-Fi address | watch broadcast `dsh-watch?`, got the URL list, `GET /health` 200, chat round-trip |
+| Second handset as a client | another Android phone on the same Wi-Fi as the bridge | discovered over broadcast with no configuration, phone layout (single-row composer), chat round-trip |
+| Third-party probe | PC on the same Wi-Fi, raw UDP | reply listed **all three** interfaces: hotspot, Wi-Fi and cellular |
+| Local ASR | synthesised Mandarin WAV posted to `/stt` | `{"text":"今天天气怎么样？","seconds":2.45}`, `sensevoice-local`, `language:auto` |
+| Dictation does not send | held the watch microphone while audio played nearby | transcript appeared in the input box + toast, chat area stayed empty — nothing was sent |
+| One session everywhere | watch, phone and second handset at once | all three talk to the same `watch-voice` session, so the history is shared by design |
+
+Two device-side quirks worth knowing when you automate a deployment: a Xiaomi/HyperOS phone
+refuses `adb install` until *Settings → Developer options → Install via USB* is allowed, and
+`adb shell input text` does not reach text fields unless *USB debugging (Security settings)*
+is on. Neither affects the app itself.
 
 ## Notes and limits
 
