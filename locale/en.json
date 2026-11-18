@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "Watch talk bridge",
-    "description": "Hold-to-talk chat between an Android smartwatch and this DSH: local speech-to-text, local text-to-speech, real DSH sessions, and the watch APK bundled.",
-    "detail": "docs/DETAIL.md"
+    "title": "Agent peer bridge",
+    "description": "Turns this DSH host into an MCP server, so the DSH running on another machine can message its agents as tools. Install it on both sides to let either agent ask the other.",
+    "detail": "README.md"
   }
 }

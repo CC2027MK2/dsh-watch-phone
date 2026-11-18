@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "手表对话桥",
-    "description": "让安卓手表按住说话就能和这台 DSH 对话：本机语音转写、本机语音合成、真实 DSH 会话，并内置手表 APK。",
-    "detail": "docs/DETAIL.md"
+    "title": "智能体对等桥",
+    "description": "把本机 DSH 变成 MCP 服务器，让另一台设备上的 DSH 把本机智能体当作工具来调用。两边各装一次，任意一边都能向另一边提问。",
+    "detail": "README.md"
   }
 }
