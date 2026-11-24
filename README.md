@@ -93,9 +93,9 @@ Add these keys to the bundle's row config (`cordis.patch.yml`):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `port` | `38402` | HTTP listen port (all interfaces). |
+| `port` | `38402` | HTTP listen port. Bound to `0.0.0.0` only when `token` is configured; otherwise loopback (see below). |
 | `discoveryPort` | `38403` | UDP port that answers the client's `dsh-watch?` broadcast with the bridge's URLs. |
-| `token` | `''` | When set, every route except `/health`, `/log` and `/watch/app.apk` requires `Authorization: Bearer <token>`. |
+| `token` | generated | Bearer token required on every route except `/health`, `/log` and `/watch/app.apk`. Leaving it empty mints one, prints it in the log, and keeps the bridge on loopback — set it to open the LAN. |
 | `sessionId` | `watch-voice` | DSH session id the watch talks to. Reused if it already exists. |
 | `cwd` | `process.cwd()` | Working directory for that session. |
 | `allowExec` | `false` | Enables `POST /exec` (shell on the host). Leave off unless you know why. |
@@ -120,6 +120,21 @@ Example that keeps the shell off but pins the voice:
       apiKey: sk-...
       voice: 冰糖
 ```
+
+### Pairing: the first run is not reachable from the LAN
+
+Everything behind the token can drive a real session, so the token is required even when
+nobody configured one, and a fresh install listens on `127.0.0.1` only:
+
+1. Start the bridge once. The minted token is in the log
+   (`<home>/.dsh/watch-phone/bridge.log`, line `auth: generated token ...`) and in
+   `<home>/.dsh/watch-phone/token`.
+2. Put that value in `config.token` and restart. The bridge then binds `0.0.0.0` and logs
+   its LAN URLs.
+3. On the watch, tap the status line, paste the same value into 配对码 and save.
+
+`adb forward tcp:38402 tcp:38402` also reaches the bridge while it is loopback-only — that is
+the intended way to pair over USB without exposing anything to the Wi-Fi.
 
 ## HTTP API
 
@@ -185,8 +200,8 @@ is on. Neither affects the app itself.
 - Sessions are real DSH sessions: the chat shows up in the app's sidebar with an
   auto-generated title, your preset, persona and model. If a session log is ever corrupted
   by an older version, delete `<dsh home>/sessions/*/<sessionId>` and it is recreated.
-- The bridge is plain HTTP on your LAN; set `token` if the network is not trusted, and keep
-  `allowExec`/`allowRelay` off by default.
+- The bridge is plain HTTP on a LAN, so the token is not optional: `/chat`, `/stt`, `/exec`
+  and `/relay` all answer `401` without it. Keep `allowExec`/`allowRelay` off by default.
 - Verified end-to-end on a Xiaomi Watch 5 (M2505W1) with Android 14 talking to DSH Go on
   Android: watch microphone → local sensevoice ASR (0.2–0.8 s warm) → DSH session → MiMo
   TTS (24 kHz WAV) → watch speaker. Other watches/ABIs are untested.
