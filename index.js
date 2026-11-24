@@ -741,9 +741,10 @@ function localAddresses () {
  * @param {number} port HTTP port to advertise
  * @param {number} udpPort port to listen on
  * @param {(msg: string) => void} log
+ * @param {() => string[]} [hosts] addresses to hand out (loopback while unpaired)
  * @returns {() => void} stop function
  */
-function startUdpBeacon (port, udpPort, log) {
+function startUdpBeacon (port, udpPort, log, hosts = localAddresses) {
   const PROBE = 'dsh-watch?'
   let socket
   try {
@@ -760,7 +761,7 @@ function startUdpBeacon (port, udpPort, log) {
   socket.on('message', (msg, rinfo) => {
     try {
       if (!msg.length || msg.toString('utf8').trim() !== PROBE) return
-      const urls = localAddresses().map((ip) => `http://${ip}:${port}`)
+      const urls = hosts().map((ip) => `http://${ip}:${port}`)
       const payload = JSON.stringify({ ok: true, service: 'dsh-watch-phone', port, urls })
       socket.send(payload, rinfo.port, rinfo.address, (err) => {
         if (err) log(`udp: reply failed ${err.message}`)
@@ -798,9 +799,10 @@ function startUdpBeacon (port, udpPort, log) {
  *
  * @param {number} port the HTTP port to advertise
  * @param {(msg: string) => void} log
+ * @param {() => string[]} [hosts] addresses to publish (loopback while unpaired)
  * @returns {() => void} stop function
  */
-function startMdnsResponder (port, log) {
+function startMdnsResponder (port, log, hosts = localAddresses) {
   const MDNS_ADDR = '224.0.0.251'
   const MDNS_PORT = 5353
   const SERVICE_TYPE = '_dsh-watch._tcp.local'
@@ -872,7 +874,7 @@ function startMdnsResponder (port, log) {
       push(16, instanceFqdn, TXT)
     }
     if (isHost) {
-      for (const ip of localAddresses()) {
+      for (const ip of hosts()) {
         const parts = ip.split('.').map((n) => Number(n))
         if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
           push(1, hostName, Buffer.from(parts))
@@ -936,11 +938,51 @@ function startMdnsResponder (port, log) {
   }
 }
 
+/**
+ * Auth is on by default, because everything behind it can drive a real DSH
+ * session. A default install used to listen on 0.0.0.0 with an empty token and
+ * therefore answered any device on the same Wi-Fi; a stranger could upload
+ * audio to `/stt`, run `/chat`, and steer this host.
+ *
+ * Resolution order:
+ *   1. `config.token` - the operator pinned one, so bind the LAN.
+ *   2. `DATA_DIR/token` - one was minted on an earlier start: reuse it, stay on
+ *      loopback until the operator pins it in the config.
+ *   3. mint a fresh random token, persist it with mode 0600, log it, loopback.
+ *
+ * Loopback-only means a fresh install is never reachable from the network; to
+ * open the LAN the operator copies the logged token into `config.token` and
+ * into the watch app (`配对码`). The token never has a default value, so
+ * "forgot to configure it" now fails closed instead of open.
+ */
+function resolveToken({ configured, dataDir, log }) {
+  const fromConfig = typeof configured === 'string' ? configured.trim() : ''
+  if (fromConfig) return { token: fromConfig, source: 'config' }
+  const file = path.join(dataDir, 'token')
+  try {
+    const saved = fs.readFileSync(file, 'utf8').trim()
+    if (saved) {
+      log(`auth: reusing token from ${file}; loopback only until config.token is set`)
+      return { token: saved, source: 'generated' }
+    }
+  } catch {
+    /* first run: no token file yet */
+  }
+  const fresh = crypto.randomBytes(18).toString('base64url')
+  try {
+    fs.mkdirSync(dataDir, { recursive: true })
+    fs.writeFileSync(file, `${fresh}\n`, { mode: 0o600 })
+  } catch (err) {
+    log(`auth: could not persist token (${err?.message ?? err}); it changes on restart`)
+  }
+  log(`auth: generated token ${fresh} (${file}); pair the watch with it, then set config.token to open the LAN`)
+  return { token: fresh, source: 'generated' }
+}
+
 export const name = 'dsh-watch-phone'
 
 export function apply(ctx, config = {}) {
   const port = Number(config.port ?? DEFAULT_PORT)
-  const token = typeof config.token === 'string' ? config.token : ''
   const proxyBase = typeof config.proxyBase === 'string' ? config.proxyBase : ''
   const discoveryPort = Number(config.discoveryPort ?? 38403)
   const tts = config.tts && typeof config.tts === 'object' ? config.tts : {}
@@ -985,6 +1027,13 @@ export function apply(ctx, config = {}) {
   }
 
   log('apply() called')
+
+  const auth = resolveToken({ configured: config.token, dataDir: DATA_DIR, log })
+  const token = auth.token
+  // Only an operator-pinned token opens the LAN; a minted one keeps us on
+  // loopback, so an unconfigured install cannot be reached from the network.
+  const bindHost = auth.source === 'config' ? '0.0.0.0' : '127.0.0.1'
+  const advertiseHosts = bindHost === '0.0.0.0' ? localAddresses() : ['127.0.0.1']
 
   const previous = globalThis[STATE_KEY]
   if (previous && typeof previous.close === 'function') {
@@ -1117,10 +1166,17 @@ export function apply(ctx, config = {}) {
       return
     }
 
-    if (token) {
-      const auth = req.headers.authorization ?? ''
-      if (auth !== `Bearer ${token}`) {
-        sendJson(res, 401, { ok: false, error: 'unauthorized' })
+    // Everything past this point costs money, touches the host, or drives a
+    // real DSH session, so a bearer token is always required - including on a
+    // fresh install where the token was minted rather than configured.
+    {
+      const header = req.headers.authorization ?? ''
+      if (header !== `Bearer ${token}`) {
+        sendJson(res, 401, {
+          ok: false,
+          error: 'unauthorized',
+          hint: 'send Authorization: Bearer <token>; the token is in %DSH_WATCH_PHONE_DATA%/token or the bridge log',
+        })
         return
       }
     }
@@ -1351,17 +1407,21 @@ export function apply(ctx, config = {}) {
   let stopMdns = () => {}
   let stopBeacon = () => {}
 
-  server.listen(port, '0.0.0.0', () => {
-    log(`server listening on 0.0.0.0:${port}`)
-    stopMdns = startMdnsResponder(port, log)
-    stopBeacon = startUdpBeacon(port, discoveryPort, log)
-    const nets = os.networkInterfaces()
-    for (const [name, addrs] of Object.entries(nets)) {
-      for (const addr of addrs ?? []) {
-        if (addr.family === 'IPv4' && !addr.internal) {
-          log(`  LAN: http://${addr.address}:${port}  (${name})`)
+  server.listen(port, bindHost, () => {
+    log(`server listening on ${bindHost}:${port}`)
+    stopMdns = startMdnsResponder(port, log, advertiseHosts)
+    stopBeacon = startUdpBeacon(port, discoveryPort, log, advertiseHosts)
+    if (bindHost === '0.0.0.0') {
+      const nets = os.networkInterfaces()
+      for (const [name, addrs] of Object.entries(nets)) {
+        for (const addr of addrs ?? []) {
+          if (addr.family === 'IPv4' && !addr.internal) {
+            log(`  LAN: http://${addr.address}:${port}  (${name})`)
+          }
         }
       }
+    } else {
+      log(`  loopback only: http://127.0.0.1:${port} (adb forward tcp:${port} tcp:${port}); set config.token to serve the LAN`)
     }
   })
 
