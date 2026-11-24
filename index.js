@@ -1033,7 +1033,9 @@ export function apply(ctx, config = {}) {
   // Only an operator-pinned token opens the LAN; a minted one keeps us on
   // loopback, so an unconfigured install cannot be reached from the network.
   const bindHost = auth.source === 'config' ? '0.0.0.0' : '127.0.0.1'
-  const advertiseHosts = bindHost === '0.0.0.0' ? localAddresses() : ['127.0.0.1']
+  // A function, not an array: the beacon and the mDNS responder call it per probe,
+  // so a LAN interface that appears after boot is picked up without a restart.
+  const advertiseHosts = () => (bindHost === '0.0.0.0' ? localAddresses() : ['127.0.0.1'])
 
   const previous = globalThis[STATE_KEY]
   if (previous && typeof previous.close === 'function') {
