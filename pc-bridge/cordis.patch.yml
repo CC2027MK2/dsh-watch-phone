@@ -8,6 +8,8 @@
       name: 'dsh-watch-draft'
       config:
         port: 38401
+        # Empty on purpose: a minted token is logged once and keeps the bridge on
+        # loopback. Set it here (the same value the watch uses) to serve the LAN.
         token: ''
         maxWaitMs: 180000
         cwd: '<workspace>'
