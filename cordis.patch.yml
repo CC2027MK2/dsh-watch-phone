@@ -3,6 +3,9 @@
       name: dsh-watch-phone
       config:
         port: 38402
+        # Leave empty on the first run: the bridge mints a token, writes it to
+        # <home>/.dsh/watch-phone/token, logs it, and listens on loopback only.
+        # Copy that value here (and into the watch) to serve the LAN.
         token: ''
         sessionId: watch-voice
         # The watch finds the phone on whatever network both share by
