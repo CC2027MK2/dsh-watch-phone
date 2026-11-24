@@ -1,6 +1,6 @@
 {
   "name": "dsh-watch-draft",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Smartwatch bridge: lets a watch (Xiaomi Watch / WearOS) chat with DSH over LAN with voice input.",
