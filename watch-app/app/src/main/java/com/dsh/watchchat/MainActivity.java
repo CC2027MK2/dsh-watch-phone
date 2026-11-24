@@ -1,6 +1,7 @@
 package com.dsh.watchchat;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -427,6 +428,9 @@ public class MainActivity extends AppCompatActivity {
                     showMicSpinner(false);
                     statusText.setVisibility(View.GONE);
                     Toast.makeText(this, "识别失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    if (String.valueOf(e.getMessage()).contains("401")) {
+                        showServerDialog();
+                    }
                 });
             } finally {
                 //noinspection ResultOfMethodCallIgnored
@@ -472,6 +476,10 @@ public class MainActivity extends AppCompatActivity {
                 runOnUiThread(() -> {
                     removeLastBubble();
                     addBubble("⚠ 连接失败: " + e.getMessage(), false);
+                    if (String.valueOf(e.getMessage()).contains("401")) {
+                        Toast.makeText(this, "需要配对码，先填 token", Toast.LENGTH_LONG).show();
+                        showServerDialog();
+                    }
                 });
             }
         });
@@ -482,6 +490,11 @@ public class MainActivity extends AppCompatActivity {
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json");
+        // The bridge requires a bearer token on every route that can drive a
+        // session, so a fresh install without one gets 401 here.
+        if (token != null && !token.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+        }
         conn.setConnectTimeout(5000);
         conn.setReadTimeout(60000);
         conn.setDoOutput(true);
@@ -503,6 +516,11 @@ public class MainActivity extends AppCompatActivity {
         reader.close();
         conn.disconnect();
 
+        if (code == 401) {
+            // The bridge gates /chat behind its token; surface it as an error so
+            // the caller can offer the pairing dialog instead of printing JSON.
+            throw new IOException("HTTP 401 需要配对码（token）");
+        }
         if (code != 200) {
             return "服务器错误 (HTTP " + code + "): " + sb.toString().trim();
         }
@@ -825,27 +843,48 @@ public class MainActivity extends AppCompatActivity {
         return null;
     }
 
+    /**
+     * Server address plus the pairing token in one dialog. The bridge always
+     * requires `Authorization: Bearer <token>`; the token is either the one the
+     * operator set as `config.token`, or the one the bridge minted on first
+     * start and printed in the DSH log / `~/.dsh/watch-phone/token`.
+     */
     private void showServerDialog() {
-        inputText.setHint("输入服务器地址 (如 http://192.0.2.10:38401)");
-        inputText.requestFocus();
-        sendButton.setOnClickListener(v -> {
-            String url = inputText.getText().toString().trim();
-            if (!TextUtils.isEmpty(url)) {
-                serverUrl = url;
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(KEY_SERVER, serverUrl).apply();
-                inputText.setText("");
-                inputText.setHint(R.string.hint_type);
-                checkConnection();
-                Toast.makeText(this, "服务器已更新: " + serverUrl, Toast.LENGTH_SHORT).show();
-            }
-            sendButton.setOnClickListener(v2 -> {
-                String text = inputText.getText().toString().trim();
-                if (!TextUtils.isEmpty(text)) {
-                    sendMessage(text);
-                    inputText.setText("");
-                }
-            });
-        });
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(getResources().getDimension(R.dimen.bubble_pad_horizontal));
+        box.setPadding(pad, pad, pad, pad);
+
+        final EditText urlInput = new EditText(this);
+        urlInput.setHint("http://192.0.2.10:38401");
+        urlInput.setText(serverUrl);
+        box.addView(urlInput);
+
+        final EditText tokenInput = new EditText(this);
+        tokenInput.setHint("配对码 token（可留空先试连）");
+        tokenInput.setText(token == null ? "" : token);
+        box.addView(tokenInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("连接与配对")
+                .setView(box)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    String url = urlInput.getText().toString().trim();
+                    String tk = tokenInput.getText().toString().trim();
+                    if (!TextUtils.isEmpty(url)) {
+                        serverUrl = url;
+                    }
+                    token = tk;
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                            .putString(KEY_SERVER, serverUrl)
+                            .putString(KEY_TOKEN, token)
+                            .apply();
+                    inputText.setHint(R.string.hint_type);
+                    checkConnection();
+                    Toast.makeText(this, "已保存： " + serverUrl, Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void addBubble(String text, boolean isUser) {
