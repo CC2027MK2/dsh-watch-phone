@@ -230,9 +230,45 @@ async function synthesizeSpeech(text) {
   return out
 }
 
+/**
+ * Auth is on by default: this bridge feeds `/chat` and `/stt` into a real DSH
+ * session on the PC, so an empty token used to mean "anyone on the Wi-Fi can
+ * drive this machine". See the same helper in the phone-side `index.js` - the
+ * rules are identical:
+ *   1. `config.token` -> use it and bind the LAN;
+ *   2. a token minted on an earlier run (`DATA_DIR/token`) -> reuse, loopback;
+ *   3. otherwise mint one, persist it 0600, log it, loopback.
+ */
+function resolveToken({ configured, dataDir, log }) {
+  const fromConfig = typeof configured === 'string' ? configured.trim() : ''
+  if (fromConfig) return { token: fromConfig, source: 'config' }
+  const file = path.join(dataDir, 'token')
+  try {
+    const saved = fs.readFileSync(file, 'utf8').trim()
+    if (saved) {
+      log(`auth: reusing token from ${file}; loopback only until config.token is set`)
+      return { token: saved, source: 'generated' }
+    }
+  } catch {
+    /* first run: no token file yet */
+  }
+  const fresh = crypto.randomBytes(18).toString('base64url')
+  try {
+    fs.mkdirSync(dataDir, { recursive: true })
+    fs.writeFileSync(file, `${fresh}\n`, { mode: 0o600 })
+  } catch (err) {
+    log(`auth: could not persist token (${err?.message ?? err}); it changes on restart`)
+  }
+  log(`auth: generated token ${fresh} (${file}); pair the watch with it, then set config.token to open the LAN`)
+  return { token: fresh, source: 'generated' }
+}
+
 export function apply(ctx, config = {}) {
   const port = config.port ?? 38401
-  const token = config.token ?? ''
+  const DATA_DIR = process.env.DSH_WATCH_BRIDGE_DATA ?? path.join(os.homedir(), '.dsh', 'watch-bridge')
+  const auth = resolveToken({ configured: config.token, dataDir: DATA_DIR, log: logLine })
+  const token = auth.token
+  const bindHost = auth.source === 'config' ? '0.0.0.0' : '127.0.0.1'
   const cwd = config.cwd ?? process.cwd()
   const maxWaitMs = config.maxWaitMs ?? 180000
 
@@ -250,10 +286,13 @@ export function apply(ctx, config = {}) {
       return
     }
 
-    if (req.url !== '/health' && !req.url.startsWith('/files/') && !req.url.startsWith('/collect')) {
-      const auth = req.headers['authorization'] ?? ''
-      const got = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-      if (token && got !== token) {
+    // `/health` and the read-only `/files/` download stay open so a fresh client
+    // can probe and bootstrap; everything else - `/chat`, `/stt`, `/collect` -
+    // requires the token, configured or minted.
+    if (req.url !== '/health' && !req.url.startsWith('/files/')) {
+      const authHeader = req.headers['authorization'] ?? ''
+      const got = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+      if (got !== token) {
         res.writeHead(401, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'unauthorized' }))
         return
@@ -262,7 +301,7 @@ export function apply(ctx, config = {}) {
 
     if (req.url === '/health' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, service: 'dsh-watch-draft', session: bridge.sessionId }))
+      res.end(JSON.stringify({ ok: true, service: 'dsh-watch-draft', session: bridge.sessionId, auth: true }))
       return
     }
 
@@ -483,9 +522,13 @@ export function apply(ctx, config = {}) {
         if (net.family === 'IPv4' && !net.internal) addrs.push(net.address)
       }
     }
-    logLine(`HTTP bridge on 0.0.0.0:${port}`)
-    for (const a of addrs) {
-      logLine(`  LAN: http://${a}:${port}`)
+    logLine(`HTTP bridge on ${bindHost}:${port}`)
+    if (bindHost === '0.0.0.0') {
+      for (const a of addrs) {
+        logLine(`  LAN: http://${a}:${port}`)
+      }
+    } else {
+      logLine(`  loopback only: http://127.0.0.1:${port}; set config.token to serve the LAN`)
     }
   }
 
@@ -507,8 +550,8 @@ export function apply(ctx, config = {}) {
     console.error(TAG, 'server error:', err.message)
   })
 
-  server.listen(port, '0.0.0.0', () => {
-    logLine(`server listening on 0.0.0.0:${port}`)
+  server.listen(port, bindHost, () => {
+    logLine(`server listening on ${bindHost}:${port}`)
     logAddresses()
   })
 
