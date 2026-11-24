@@ -1,8 +1,10 @@
 name: build-watch-app
 
-# Compiles the watch client on every push that touches it and publishes the
-# resulting APK as a build artifact. Release signing stays out of CI: the keystore
-# lives on the maintainer's machine, so CI produces an unsigned APK.
+# Compiles the watch client on every push that touches it and publishes the APK.
+#
+# Release signing is opt-in from repository secrets: when ANDROID_KEYSTORE_BASE64
+# is present the APK comes out signed and installable; otherwise the run still
+# succeeds with an unsigned APK, so forks and pull requests keep working.
 #
 # Manual run: Actions → build-watch-app → Run workflow.
 
@@ -19,6 +21,14 @@ on:
 
 permissions:
   contents: read
+
+# Secrets are lifted into env so a step can test them: `if:` cannot read the
+# secrets context, and a step-level `env:` is invisible to that step's own `if`.
+env:
+  KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+  KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+  KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+  KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
 jobs:
   build:
@@ -48,12 +58,36 @@ jobs:
           "$SDKM/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" > /dev/null
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
+      # app/build.gradle reads watch-app/keystore.properties and signs the
+      # release build only when that file exists, so this step is what turns
+      # "unsigned" into "installable".
+      - name: Restore signing material
+        if: env.KS_B64 != ''
+        run: |
+          printf '%s' "$KS_B64" | base64 -d > watch-release.keystore
+          {
+            echo "storeFile=../watch-release.keystore"
+            echo "storePassword=$KS_PASS"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > keystore.properties
+          "$JAVA_HOME/bin/keytool" -list -keystore watch-release.keystore -storepass "$KS_PASS" > /dev/null
+          echo "signing material restored (alias $KEY_ALIAS)"
+
       - name: Build release APK
         run: |
           # The wrapper is uploaded through the REST API, which cannot record the
           # executable bit, so restore it here.
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --console=plain
+
+      - name: Verify the APK is signed
+        if: env.KS_B64 != ''
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          BT="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -n1)"
+          "$BT/apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk
 
       - name: Collect artifact
         run: |
@@ -65,3 +99,7 @@ jobs:
           name: dsh-watch-chat-apk
           path: watch-app-release.apk
           if-no-files-found: error
+
+      - name: Clean up signing material
+        if: always()
+        run: rm -f keystore.properties watch-release.keystore
